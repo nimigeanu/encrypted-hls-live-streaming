@@ -1,0 +1,371 @@
+Description: Proof of concept HLS AES copy protected streaming platform
+
+Parameters:
+  InstanceType:
+    Description: Streaming server instance size
+    Type: String
+    Default: t3.nano
+    AllowedValues: [t3.nano, t3.micro, t3.small, t3.medium, t3.large, t3.xlarge, t3.2xlarge]
+  HTTPS:
+    Description: If 'yes', HLS streaming will be set up over HTTPS, otherwise over HTTP
+    Type: String
+    Default: "no"
+    AllowedValues: ["yes", "no"]
+  SSLCertificate:
+    Description: SSL Certificate for HTTPS (in PEM format); only required for HTTPS
+    Type: String
+  SSLPrivateKey:
+    Description: Private key for HTTPS (in PEM format); only required for HTTPS
+    Type: String
+  HTTPSDomain:
+    Description: Domain name for HTTPS (i.e. 'my.example.com'); only required for HTTPS
+    Type: String
+
+
+Mappings: 
+  AmiByRegion: 
+    ap-east-1: 
+      "ami": "ami-d26218a3"
+    ap-northeast-1: 
+      "ami": "ami-0d5db3e2a1b98ca94"
+    ap-south-1: 
+      "ami": "ami-0237472cf337d9529"
+    ap-southeast-1: 
+      "ami": "ami-0c199cae95cea87f0"
+    ca-central-1: 
+      "ami": "ami-0dbe45195223e250b"
+    eu-central-1: 
+      "ami": "ami-040a1551f9c9d11ad"
+    eu-north-1: 
+      "ami": "ami-0567220a328fe4fee"
+    eu-west-1: 
+      "ami": "ami-0e41581acd7dedd99"
+    me-south-1: 
+      "ami": "ami-0a7794ed517908686"
+    sa-east-1: 
+      "ami": "ami-0065a65613972a22a"
+    us-east-1: 
+      "ami": "ami-0d5ae5525eb033d0a"
+    us-west-1: 
+      "ami": "ami-00a3e4424e9ab3e56"
+    cn-north-1: 
+      "ami": "ami-01993b4213b4bffb5"
+    cn-northwest-1: 
+      "ami": "ami-01d4e30d4d4952d0f"
+    us-gov-west-1: 
+      "ami": "ami-a76736c6"
+    us-gov-east-1: 
+      "ami": "ami-64a84b15"
+    ap-northeast-2: 
+      "ami": "ami-0f4362c71ffaf7759"
+    ap-southeast-2: 
+      "ami": "ami-0c0483bc96aef8b2f"
+    eu-west-2: 
+      "ami": "ami-00f94dc949fea2adf"
+    us-east-2: 
+      "ami": "ami-0a7f2b5b6b87eaa1b"
+    us-west-2: 
+      "ami": "ami-09c6723c6c24250c9"
+    ap-northeast-3: 
+      "ami": "ami-07672d9af3947230d"
+    eu-west-3: 
+      "ami": "ami-0df03c7641cf41947"
+
+Conditions: 
+  IsSecure: !Equals [ !Ref HTTPS, "yes" ]
+  IsInsecure: !Not [Condition: IsSecure]
+
+Resources:
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        -
+          PolicyName: !Sub "${AWS::StackName}-LambdaRolePolicy"
+          PolicyDocument:
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Join ["", ["arn:aws:iam::", Ref: "AWS::AccountId", ":role/*"]]
+              -
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Join ["", ["arn:aws:logs:", Ref: "AWS::Region", ":", Ref: "AWS::AccountId", ":log-group:/aws/lambda/*"]]
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.138.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value:  !Join ['', [!Ref "AWS::StackName", "-VPC" ]]
+   
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.138.10.0/24
+      MapPublicIpOnLaunch : true
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-Public
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value:  !Sub ${AWS::StackName}-Public
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway  
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows ssh, rtmp and http/s connections to host
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 1935
+        ToPort: 1935
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8080
+        ToPort: 8080
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8443
+        ToPort: 8443
+        CidrIp: 0.0.0.0/0
+
+  ParsedCertificate:
+    Type: "Custom::LoadLambda"
+    Properties:
+      ServiceToken: !GetAtt ParseCertificateFunction.Arn
+      Input: 
+        Ref: SSLCertificate
+      Resource: "EndPoint"
+
+  ParsedKey:
+    Type: "Custom::LoadLambda"
+    Properties:
+      ServiceToken: !GetAtt ParseCertificateFunction.Arn
+      Input: 
+        Ref: SSLPrivateKey
+      Resource: "EndPoint"
+
+  ParseCertificateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-ParseCertificate
+      Description: Properly formats PEM key and certificates for use with Nginx
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        ZipFile: |
+          var response = require('cfn-response');
+          exports.handler = (event, context) => {
+            console.log('REQUEST:: ', JSON.stringify(event, null, 2));
+            
+            var input = event.ResourceProperties.Input;
+            let output = input.split("---- ").join("----\n");
+            output = output.split(" ----").join("\n----");
+            output = output.split(" ").join("");
+            output = output.split("CERTIFICATE").join(" CERTIFICATE");
+            output = output.split("RSAPRIVATEKEY").join(" RSA PRIVATE KEY");
+
+
+            var responseData = {
+              Output: output
+            };
+            console.log("responseData: ", responseData);
+            response.send(event, context, response.SUCCESS, responseData);
+          };
+
+      Runtime:  nodejs12.x
+      Timeout: 30
+
+  HttpServer:
+    Type: AWS::EC2::Instance
+    Condition: IsInsecure
+    Properties:
+      ImageId: !FindInMap [AmiByRegion, !Ref "AWS::Region", "ami"]
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -x
+          
+          apt-get update
+          git clone https://github.com/sergey-dryabzhinsky/nginx-rtmp-module.git
+          apt-get --assume-yes install build-essential libpcre3 libpcre3-dev libssl-dev zlib1g-dev
+          wget http://nginx.org/download/nginx-1.16.1.tar.gz
+          tar -xf nginx-1.16.1.tar.gz
+          cd nginx-1.16.1
+          ./configure --with-http_ssl_module --add-module=../nginx-rtmp-module
+          make -j 1
+          sudo make install
+          
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/http/nginx.conf > /usr/local/nginx/conf/nginx.conf
+          publicIp=$(curl -L http://169.254.169.254/latest/meta-data/public-ipv4)
+          sed -i "s,{DRM_SERVER_HOST},$publicIp,g" /usr/local/nginx/conf/nginx.conf
+          /usr/local/nginx/sbin/nginx
+
+
+          apt --assume-yes install nodejs
+          apt --assume-yes install npm
+          npm install -g pm2
+
+          mkdir /usr/local/node/
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/http/index.html > /usr/local/node/index.html
+          sed -i "s,{STREAMING_SERVER_HOST},$publicIp,g" /usr/local/node/index.html
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/http/index.js > /usr/local/node/index.js
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/package.json > /usr/local/node/package.json
+
+          cd /usr/local/node
+          npm install
+          pm2 start index.js
+      Tags: 
+        - 
+          Key: "Name"
+          Value: !Sub "${AWS::StackName}-Server"
+
+  HttpsServer:
+    Type: AWS::EC2::Instance
+    Condition: IsSecure
+    Properties:
+      ImageId: !FindInMap [AmiByRegion, !Ref "AWS::Region", "ami"]
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -x
+          
+          apt-get update
+          git clone https://github.com/sergey-dryabzhinsky/nginx-rtmp-module.git
+          apt-get --assume-yes install build-essential libpcre3 libpcre3-dev libssl-dev zlib1g-dev
+          wget http://nginx.org/download/nginx-1.16.1.tar.gz
+          tar -xf nginx-1.16.1.tar.gz
+          cd nginx-1.16.1
+          ./configure --with-http_ssl_module --add-module=../nginx-rtmp-module
+          make -j 1
+          sudo make install
+          
+          echo "${ParsedCertificate.Output}" > /etc/ssl/certs/cert156241.pem
+          echo "${ParsedKey.Output}" > /etc/ssl/certs/cert156241.key
+
+
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/https/nginx.conf > /usr/local/nginx/conf/nginx.conf
+          sed -i "s,{DRM_SERVER_HOST},${HTTPSDomain},g" /usr/local/nginx/conf/nginx.conf
+          /usr/local/nginx/sbin/nginx
+
+
+          apt --assume-yes install nodejs
+          apt --assume-yes install npm
+          npm install -g pm2
+
+          mkdir /usr/local/node/
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/https/index.html > /usr/local/node/index.html
+          sed -i "s,{STREAMING_SERVER_HOST},${HTTPSDomain},g" /usr/local/node/index.html
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/https/index.js > /usr/local/node/index.js
+          curl https://lostshadow.s3.amazonaws.com/copy-protected-hls/package.json > /usr/local/node/package.json
+
+          cd /usr/local/node
+          npm install
+          pm2 start index.js
+      Tags: 
+        - 
+          Key: "Name"
+          Value: !Sub "${AWS::StackName}-Server"
+
+Outputs:
+  IngressEndpoint:
+    Description: RTMP URL to publish to
+    Condition: IsInsecure
+    Value: !Sub 
+      - rtmp://${publicIp}/live/stream001
+      - { publicIp: !GetAtt HttpServer.PublicIp }
+  SecureIngressEndpoint:
+    Description: RTMP URL to publish to
+    Condition: IsSecure
+    Value: !Sub 
+      - rtmp://${publicIp}/live/stream001
+      - { publicIp: !GetAtt HttpsServer.PublicIp }
+  TestPlayerUrl:
+    Description: Address of the test player
+    Condition: IsInsecure
+    Value: !Sub 
+      - http://${publicIp}/player
+      - { publicIp: !GetAtt HttpServer.PublicIp }
+  SecureTestPlayerUrl:
+    Description: Address of the test player
+    Condition: IsSecure
+    Value: !Sub 
+      - https://${HTTPSDomain}/player
+      - { HTTPSDomain: !Ref HTTPSDomain }
+  Note:
+    Description: DNS setup note
+    Condition: IsSecure
+    Value: !Sub 
+      - Please set DNS for '${HTTPSDomain}' to '${publicIp}' (A record)
+      - { publicIp: !GetAtt HttpsServer.PublicIp, HTTPSDomain: !Ref HTTPSDomain }

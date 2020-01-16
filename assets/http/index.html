@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Player test page</title>
+    <script src="//cdn.jsdelivr.net/clappr/latest/clappr.min.js"></script>
+</head>
+<body>
+    <div id="player"></div>
+    <script>
+        var player = new Clappr.Player({
+            source: 'http://{STREAMING_SERVER_HOST}:8080/hls/stream001.m3u8',
+            parentId: '#player'
+        });
+    </script>
+</body>
+</html>
