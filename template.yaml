@@ -339,6 +339,16 @@ Resources:
           Value: !Sub "${AWS::StackName}-Server"
 
 Outputs:
+  StreamingServerPublicDNS:
+    Description: Streaming server domain name (for CDN setup)
+    Condition: IsInsecure
+    Value: !GetAtt HttpServer.PublicDnsName
+
+  SecureStreamingServerPublicDNS:
+    Description: Streaming server domain name (for CDN setup)
+    Condition: IsSecure
+    Value: !GetAtt HttpsServer.PublicDnsName
+
   IngressEndpoint:
     Description: RTMP URL to publish to
     Condition: IsInsecure
@@ -351,6 +361,19 @@ Outputs:
     Value: !Sub 
       - rtmp://${publicIp}/live/stream001
       - { publicIp: !GetAtt HttpsServer.PublicIp }
+  StreamUrl:
+    Description: HLS URL of the playback stream
+    Condition: IsInsecure
+    Value: !Sub 
+      - http://${publicIp}:8080/hls/stream001.m3u8
+      - { publicIp: !GetAtt HttpServer.PublicIp }
+  SecureStreamUrl:
+    Description: HLS URL of the playback stream
+    Condition: IsSecure
+    Value: !Sub 
+      - https://${HTTPSDomain}:8443/hls/stream001.m3u8
+      - { HTTPSDomain: !Ref HTTPSDomain }
+
   TestPlayerUrl:
     Description: Address of the test player
     Condition: IsInsecure
