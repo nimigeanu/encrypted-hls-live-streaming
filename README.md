@@ -33,7 +33,7 @@
 
 	Also note that **the enpoint may not be ready** as soon as CloudFormation stack is complete; it may take a couple minutes more for the server software to be compiled, installed and started on the virtual server so be patient
 
-2. Test the video playback by opening the above `TestPlayerUrl` in a browser
+2. Test the video playback by opening the above `TestPlayerUrl` (as output by CloudFormation) in a browser
 	
 	Once again, node that this may not be available right away; resources do take time to get set up, especially on lower-end virtual server instances
 
@@ -128,6 +128,43 @@ The test run deploys the 2 servers on the same virtual machine for simplicity. T
 * Properly link to the set up 'application server' in the [hls_key rtmp configuration](assets/https/nginx.conf#L21)
 * Properly define the 'streaming server' for key retrieval by the 'application server' over the private channel [here](assets/https/index.js#L36) (i.e. replace '127.0.0.1' with the address of the streaming server as these are no longer on the same machine)
 * Properly define the application server's IP as the authorized address to request the keys from the streaming server [here](assets/https/nginx.conf#L37) (i.e. replace '127.0.0.1' with the address of the application server as these are no longer on the same machine)
+
+## Integrating with your own CMS
+
+The pivot point of the solution is the **key provision** logic. For the scope of this demo it implements a simple [algorithm](assets/https/index.js#L28) that grants or denies access to the key based on mere presence of a **session** variable. This can be easily extended to provide conditional access to content depending on user, title, timing etc
+
+The following will be needed to integrate with your own setup:
+* Follow the previous sections to [use a different player](#Using-a-different-player), [stream via CDN](#Streaming-through-a-CDN), [use different ports](#Setting-up-different-ports), [run the servers in distinct environments](#Running-the-streaming-and-application-servers-on-different-environments)
+* Alter the key provision [rules](assets/https/index.js#L28) or create your own from scratch; the URL takes a "key" GET parameter that has to be forwarded in the request to the 'streaming server'; in the response, pass along the retrieved 16-byte binary key to grant access, or anything else to deny access to the content
+
+		GET /keys?key=stream001-25130.key HTTP/1.1
+		Host: test25.example.net
+		Connection: keep-alive
+		Pragma: no-cache
+		Cache-Control: no-cache
+		User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36
+		Accept: */*
+		Sec-Fetch-Site: same-origin
+		Sec-Fetch-Mode: cors
+		Referer: https://test25.example.net/player
+		Accept-Encoding: gzip, deflate, br
+		Accept-Language: en-US,en;q=0.9,ro;q=0.8,es;q=0.7,pt;q=0.6
+		Cookie: connect.sid=s%3Aqs5w1mof2F5U8HXOWUqMVOuQcjYZVPc3.Ez%2BZDrR5JCWTwKX5v2K%2FJQjWRurisVi5o7RdYIhwa1I
+
+		HTTP/1.1 200 OK
+		X-Powered-By: Express
+		Content-Type: application/octet-stream
+		Content-Length: 16
+		ETag: W/"10-DZhoCa3TK6y4ENhe5Ru5cl79sXM"
+		Date: Mon, 20 Jan 2020 13:14:48 GMT
+		Connection: keep-alive
+
+		XXXXXXXXXXXXXXXX
+
+	* the "key" parameter includes the stream name (i.e. "stream001-0.key" includes "stream001") therefore the script can be aware of what piece of content is being accessed
+	* in the case of a members-only platform, the user requesting access to the key can be uniquely identified based on the provided session info
+	* in light of the above, script is aware of both "who" and "what" is requesting, making possible any kind of sophisticated secure restricted access schemes, i.e. for pay-per-view implements
+* Properly link to the updated key retrieval URL (if different from original) in the [hls_key rtmp configuration](assets/https/nginx.conf#L21)
 
 ## Caching the decryption keys
 
